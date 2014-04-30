@@ -2,6 +2,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <ctime>
 
 using namespace std;
 
@@ -24,7 +25,7 @@ void usage()
 	cout << "Usage: checker.exe [player_1_executable] [player_2_executable]\n";
 }
 
-void LogStep(int player, int stepType, char competitorField[][10],  char myField[][10])
+void LogStep(int player, double timer, int stepType, char competitorField[][10],  char myField[][10])
 {
 	logFile[player] << "Step " << step << ":\n<input.txt>\n";
 	//print input file given to player
@@ -44,7 +45,7 @@ void LogStep(int player, int stepType, char competitorField[][10],  char myField
 		}
 		logFile[player] << endl;
 	}
-	logFile[player] << "<output.txt>\n";
+	logFile[player] << "<output.txt (generated in " << timer << "s)>\n";
 	//print output file returned by player
 	for (int i = 0; i < 15; i++)
 	{
@@ -76,6 +77,9 @@ void InitPlayer(int player)
 	//prepare log files
 	if (player == 0) logFile[player].open("logfile_1.txt", ofstream::out);
 	else logFile[player].open("logfile_2.txt", ofstream::out);
+	//we need this to print time correctly
+	logFile[player].precision(3);
+	logFile[player] << fixed;
 	//reset field and score
 	score[player] = 0;
 	for (int i = 0; i < 15; i++)
@@ -88,7 +92,7 @@ void InitPlayer(int player)
 	}
 }
 
-void ExecPlayer(int player)
+double ExecPlayer(int player)
 {
 	ofs.open("input.txt", ofstream::out);
 	for (int r = 0; r < 2; r++)
@@ -103,7 +107,11 @@ void ExecPlayer(int player)
 		}
 	}
 	ofs.close();
+	//measure time
+	double startTime = clock();
 	system(playerExe[player].c_str());
+	double endTime = clock();
+	return (endTime - startTime) / CLOCKS_PER_SEC;
 }
 
 int ValidateField(char oldField[][10], char newField[][10])
@@ -212,15 +220,45 @@ int RecursiveRemove(char myField[][10], int x, int y, char colour)
 
 void Fall(char myField[][10])
 {
+	char column[15];
+	int ctr;
 	for (int j = 0; j < 10; j++)
 	{
-		for (int i = 13; i >= 0; i--)
+		ctr = 14;
+		for (int i = 14; i >= 0; i--)
 		{
-			while (i < 14 && myField[i][j] != '.' && myField[i + 1][j] == '.')
+			if (myField[i][j] != '.')
 			{
-				swap(myField[i][j], myField[i + 1][j]);
-				i++;
+				column[ctr] = myField[i][j];
+				ctr--;
 			}
+		}
+		for (int i = 0; i < 15; i++)
+		{
+			if (i <= ctr) myField[i][j] = '.';
+			else myField[i][j] = column[i];
+		}
+	}
+}
+
+char random_colour()
+{
+	int rnd = rand() % 5;
+	if (rnd == 0) return 'R';
+	if (rnd == 1) return 'G';
+	if (rnd == 2) return 'B';
+	if (rnd == 3) return 'Y';
+	if (rnd == 4) return 'O';
+}
+
+void randomFill(char competitorField[][10])
+{
+	for (int i = 0; i < 15; i++)
+	{
+		for (int j = 0; j < 10; j++)
+		{
+			if (competitorField[i][j] == '.')
+				competitorField[i][j] = random_colour();
 		}
 	}
 }
@@ -244,58 +282,81 @@ int main(int argc, char **argv)
 	step = 0;
 	char myField[15][10], competitorField[15][10], tc; //where we save player's steps
 	int stepType, ti;
+	double timer;
 
 	while (step < maxStep)
 	{
 		for (int r = 0; r < 2; r++)
 		{
-			ExecPlayer(r); //prepare input for player and execute him
-			//read competitor field
-			ifs.open("output.txt", ifstream::in);
-			for (int i = 0; i < 15; i++)
+			timer = ExecPlayer(r); //prepare input for player and execute him
+			//check time limits
+			if (timer > 2.0)
 			{
-				for (int j = 0; j < 10; j++)
-				{
-					ifs >> competitorField[i][j];
-				}
-			}
-			stepType = ValidateField(field[(r + 1) % 2], competitorField);
-			if (stepType != 0) //if player did something wrong
-			{
-				return ERR_PLAYER_CHEATS + r;
-			}
-			//check if we want to remove connected area
-			int filePos = ifs.tellg(); //save current position in file
-			ifs >> tc; //read one symbol
-			ifs.seekg(filePos); //restore current position in file
-			if (tc >= '0' && tc <= '9') //if that symbol was digit - we want to remove connected area
-			{
-				ifs >> vx >> vy;
-				if (vx < 1 || vx > 15 || vy < 1 || vy > 10) return ERR_PLAYER_CHEATS + r;
-				stepType = 3;
+				stepType = -1;
+				//leave player's field as is
 				memcpy(myField, field[r], sizeof myField);
-				ti = RecursiveRemove(myField, vx - 1, vy - 1, field[r][vx - 1][vy - 1]);
-				score[r] += ti * ti;
-				Fall(myField);
+				//fill competitor's empty cells with random colour
+				memcpy(competitorField, field[(r + 1) % 2], sizeof competitorField);
+				randomFill(competitorField);
+				//print warning in logs
+				logFile[r] << "<Warning: time limit exceeded>\n";
 			}
 			else
 			{
-				//read player's field
+				//read competitor field
+				ifs.open("output.txt", ifstream::in);
 				for (int i = 0; i < 15; i++)
 				{
 					for (int j = 0; j < 10; j++)
 					{
-						ifs >> myField[i][j];
+						ifs >> competitorField[i][j];
 					}
 				}
-				stepType = ValidateField(field[r], myField);
-				if (stepType == -1 && step != 0) //if player did something wrong
+				stepType = ValidateField(field[(r + 1) % 2], competitorField);
+				if (stepType != 0) //if player did something wrong
 				{
-					return ERR_PLAYER_CHEATS + r;
+					//fill competitor's empty cells with random colour
+					memcpy(competitorField, field[(r + 1) % 2], sizeof competitorField);
+					randomFill(competitorField);
+					//print warning in logs
+					logFile[r] << "<Warning: competitor's field was filled incorrectly>\n";
 				}
+				//check if we want to remove connected area
+				std::streamoff filePos = ifs.tellg(); //save current position in file
+				ifs >> tc; //read one symbol
+				ifs.seekg(filePos); //restore current position in file
+				if (tc >= '0' && tc <= '9') //if that symbol was digit - we want to remove connected area
+				{
+					ifs >> vx >> vy;
+					if (vx < 1 || vx > 15 || vy < 1 || vy > 10) return ERR_PLAYER_CHEATS + r;
+					stepType = 3;
+					memcpy(myField, field[r], sizeof myField);
+					ti = RecursiveRemove(myField, vx - 1, vy - 1, field[r][vx - 1][vy - 1]);
+					score[r] += ti * ti;
+					Fall(myField);
+				}
+				else
+				{
+					//read player's field
+					for (int i = 0; i < 15; i++)
+					{
+						for (int j = 0; j < 10; j++)
+						{
+							ifs >> myField[i][j];
+						}
+					}
+					stepType = ValidateField(field[r], myField);
+					if (stepType == -1 && step != 0) //if player did something wrong
+					{
+						//just leave player's field as is
+						memcpy(myField, field[r], sizeof myField);
+						//and print warning in logs
+						logFile[r] << "<Warning: incorrect step, ignoring it>\n";
+					}
+				}
+				ifs.close();
 			}
-			ifs.close();
-			LogStep(r, stepType, competitorField, myField);
+			LogStep(r, timer, stepType, competitorField, myField);
 			//save modified fields
 			memcpy(field[r], myField, sizeof field[r]);
 			memcpy(field[(r + 1) % 2], competitorField, sizeof field[r]);
